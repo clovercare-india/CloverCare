@@ -1,0 +1,69 @@
+name: Deploy to Cloud Run - clovercare Development environment
+
+on:
+  push:
+    tags:
+      - 'dev*'
+
+jobs:
+  deploy:
+    name: Deploy to dev environment
+    runs-on: ubuntu-latest
+    env:
+      CLOUD_RUN_SERVICE: eldercare-dev-app
+      GCP_ARTIFACT_REPO: eldercare-artifact-repo
+      REGISTRY_REGION: asia-southeast1
+
+    steps:
+      # Checkout repo to get commit info
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Authenticate to Google Cloud
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # Find the version tag for this commit
+      - name: Find version tag for current commit
+        run: |
+          # Get all tags pointing to current commit
+          VERSION_TAG=$(git tag --points-at HEAD | grep '^v' | head -n 1)
+          
+          if [ -z "$VERSION_TAG" ]; then
+            echo "❌ No version tag (v*) found for this commit!"
+            echo "Please tag this commit with a version (e.g., v1.0.1) before deploying."
+            exit 1
+          fi
+          
+          echo "Found version tag: $VERSION_TAG"
+          IMAGE="${{ env.REGISTRY_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GCP_ARTIFACT_REPO }}/clovercare-admin-cms:${VERSION_TAG}"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "🐳 Will deploy image: $IMAGE"
+
+      # Verify image exists in Artifact Registry
+      - name: Verify image exists
+        run: |
+          echo "🔍 Verifying image exists in Artifact Registry..."
+          if ! gcloud artifacts docker images describe "${{ env.IMAGE }}" --format="value(name)" 2>/dev/null; then
+            echo "❌ Image not found: ${{ env.IMAGE }}"
+            echo "Please ensure the build workflow has completed for this version tag."
+            exit 1
+          fi
+          echo "✅ Image found in registry"
+
+      # Deploy to Cloud Run
+      - name: Deploy to Cloud Run
+        run: |
+          echo "🚀 Deploying to Cloud Run service: ${{ env.CLOUD_RUN_SERVICE }}..."
+          gcloud run deploy ${{ env.CLOUD_RUN_SERVICE }} \
+            --image ${{ env.IMAGE }} \
+            --region ${{ env.REGISTRY_REGION }} \
+            --platform managed \
+            --allow-unauthenticated
+
+          echo "✅ Deployment complete for clovercare Development environment!"

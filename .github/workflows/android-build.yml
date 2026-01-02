@@ -1,0 +1,38 @@
+name: Build Android AAB (EAS)
+
+on:
+  push:
+    tags:
+      - 'android-v*'
+
+jobs:
+  eas-build:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Expo & EAS
+        uses: expo/expo-github-action@v8
+        with:
+          token: ${{ secrets.EXPO_TOKEN }}
+          eas-version: latest
+          expo-version: latest
+
+      - name: Install dependencies
+        run: npm install
+
+
+      - name: Build Android (Production)
+        run: eas build --platform android --profile production --non-interactive
+

@@ -1,0 +1,67 @@
+
+name: Build & Push to Artifact Registry
+
+on:
+  push:
+    tags:
+      - 'v*'  # Matches v1, v1.0, v1.0.1, v2, v2.3.4, etc.
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    env:
+      GCP_ARTIFACT_REPO: eldercare-artifact-repo
+      REGISTRY_REGION: asia-southeast1
+
+    steps:
+      # Checkout repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Authenticate to Google Cloud
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # Configure Docker for Artifact Registry
+      - name: Configure Docker to use Artifact Registry
+        run: |
+          echo "🔑 Configuring Docker for Artifact Registry..."
+          gcloud auth configure-docker ${{ env.REGISTRY_REGION }}-docker.pkg.dev --quiet
+
+      # Create .env file from secrets for build
+      - name: Create .env file for Docker build
+        working-directory: ./admin-cms
+        run: |
+          echo "📝 Creating .env file for Docker build..."
+          cat > .env << EOF
+          VITE_FIREBASE_API_KEY=${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN=${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID=${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET=${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID=${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID=${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_MEASUREMENT_ID=${{ secrets.VITE_FIREBASE_MEASUREMENT_ID }}
+          EOF
+
+      # Build Docker image with version tag
+      - name: Build Docker image
+        working-directory: ./admin-cms
+        run: |
+          echo "🐳 Building Docker image..."
+          VERSION_TAG=${GITHUB_REF#refs/tags/}
+          IMAGE="${{ env.REGISTRY_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.GCP_ARTIFACT_REPO }}/clovercare-admin-cms:${VERSION_TAG}"
+          docker build -t "$IMAGE" .
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
+
+      # Push Docker image
+      - name: Push Docker image
+        run: |
+          echo "🚀 Pushing Docker image to Artifact Registry..."
+          docker push "${{ env.IMAGE }}"
+          echo "✅ Image pushed: ${{ env.IMAGE }}"
+          echo "📝 Version Tag: ${{ env.VERSION_TAG }}"

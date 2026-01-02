@@ -1,0 +1,17 @@
+{
+  "hosting": {
+    "public": "build",
+    "site": "your-firebase-project-id",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "rewrites": [
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

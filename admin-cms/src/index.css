@@ -1,0 +1,40 @@
+@import "@firecms/ui/index.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --fcms-primary: #0070F4;
+    --fcms-primary-bg: #0061e610;
+    --fcms-secondary: #FF5B79;
+}
+
+body {
+    @apply w-full min-h-screen bg-surface-50 dark:bg-surface-900 flex flex-col items-center justify-center;
+}
+
+a {
+
+    @apply text-primary dark:text-primary
+}
+
+@layer components {
+    .animate-glow {
+        animation: glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    @keyframes glow {
+
+        0%,
+        100% {
+            box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.2);
+            border-color: rgba(254, 202, 202, 0.8);
+        }
+
+        50% {
+            box-shadow: 0 0 20px 0 rgba(239, 68, 68, 0.4);
+            border-color: rgba(239, 68, 68, 0.8);
+        }
+    }
+}

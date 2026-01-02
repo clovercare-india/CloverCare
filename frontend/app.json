@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "Clover Care",
+    "slug": "clovercare",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "clovercare",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "icon": "./assets/logo.png",
+    "splash": {
+      "image": "./assets/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.company.appName",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocationWhenInUseUsageDescription": "Clover Care needs location access to provide location-based services for seniors.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Clover Care needs location access to provide location-based services for seniors.",
+        "NSCameraUsageDescription": "Clover Care needs camera access to take photos for profile and documentation.",
+        "NSPhotoLibraryUsageDescription": "Clover Care needs photo library access to select images for profile and documentation.",
+        "NSContactsUsageDescription": "Clover Care needs contacts access to help you connect with family members and care managers.",
+        "NSUserNotificationPermissionDescription": "Clover Care needs notification permission to send you important alerts about your seniors."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/logo.png",
+        "backgroundColor": "#FFFFFF"
+      },
+      "edgeToEdgeEnabled": false,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.company.appName",
+      "googleServicesFile": "./google-services.json"
+    },
+    "plugins": [
+      "expo-router",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      [
+        "@react-native-firebase/messaging",
+        {
+          "notification_icon": "./assets/logo.png"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": false
+    },
+    "extra": {
+      "router": {}
+    },
+    "owner": "",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/28bd023e-4a76-4c8a-9860-eddabce2df9f"
+    }
+  }
+}
