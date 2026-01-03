@@ -11,14 +11,10 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        // Check by UID
         (userExists(request.auth.uid) && user(request.auth.uid).data.role == 'admin') ||
-        // Check by Email (for CMS)
         (request.auth.email != null && 
          exists(/databases/$(database)/documents/users/$(request.auth.email)) &&
-         get(/databases/$(database)/documents/users/$(request.auth.email)).data.role == 'admin') ||
-        // If any user document exists with their email, assume admin (CMS auth)
-        (request.auth.email != null && exists(/databases/$(database)/documents/users/$(request.auth.email)))
+         get(/databases/$(database)/documents/users/$(request.auth.email)).data.role == 'admin')
       );
     }
 
@@ -32,10 +28,6 @@ service cloud.firestore {
 
     function role(uid) {
       return userExists(uid) ? user(uid).data.role : null;
-    }
-
-    function isSenior(uid) {
-      return request.auth.uid == uid;
     }
 
     function isCareManager() {
@@ -55,19 +47,8 @@ service cloud.firestore {
         && request.auth.uid in user(seniorId).data.get('linkedFamily', []);
     }
 
-    // READ-ONLY HELPER (Safe for read rules only)
-    function hasAccessToSenior(seniorId) {
-      return seniorId != null && isSignedIn() && (
-        isAdmin() ||
-        isSenior(seniorId) ||
-        isAssignedCareManager(seniorId) ||
-        isLinkedFamily(seniorId)
-      );
-    }
-
-    /* ===================== GLOBAL RULE - ADMINS CAN DO ANYTHING ===================== */
+    /* ===================== GLOBAL ADMIN RULE ===================== */
     
-    // Admins have full access to all collections
     match /{document=**} {
       allow read, write, delete: if isAdmin();
     }
@@ -75,31 +56,20 @@ service cloud.firestore {
     /* ===================== USERS ===================== */
 
     match /users/{userId} {
-      allow read: if isSignedIn() && (
-        request.auth.uid == userId ||
-        (resource.data.role == 'senior' && request.auth.uid in resource.data.get('linkedFamily', [])) ||
-        (resource.data.role == 'senior' && isAssignedCareManager(userId)) ||
-        // Allow reading senior by linking code (for family members linking)
-        (resource.data.role == 'senior' && resource.data.get('linkingCode', null) != null) ||
-        // Allow reading any user document that has a role (needed for CMS email-based authenticator)
-        resource.data.role != null
-      );
+      allow read: if isSignedIn() || 
+        (request.auth == null && resource.data.get('role', null) == 'caremanager');
+      
+      allow list: if isSignedIn() || request.auth == null;
 
       allow create: if isSignedIn() && (
-        // Admins can create any non-admin user
-        (isAdmin() && request.resource.data.get('role', null) != 'admin') ||
-        // User creating their own profile
         (request.auth.uid == userId && request.resource.data.get('role', null) != 'admin') ||
-        // Family member creating a senior profile
         (role(request.auth.uid) == 'family' && 
          request.resource.data.get('role', null) == 'senior' &&
          request.auth.uid in request.resource.data.get('linkedFamily', []))
       );
 
       allow update: if isSignedIn() && (
-        // User updating their own profile (except role)
         (request.auth.uid == userId && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])) ||
-        // Family linking to a senior: can add to senior's linkedFamily array
         (
           role(request.auth.uid) == 'family' &&
           resource.data.role == 'senior' &&
@@ -109,173 +79,208 @@ service cloud.firestore {
           request.resource.data.linkedFamily.hasAll(resource.data.get('linkedFamily', [])) &&
           request.resource.data.linkedFamily.size() == resource.data.get('linkedFamily', []).size() + 1 &&
           request.auth.uid in request.resource.data.linkedFamily
+        ) ||
+        (
+          role(request.auth.uid) == 'caremanager' &&
+          resource.data.role == 'senior' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['careManagerId', 'updatedAt', 'lastHealthLogAt'])
         )
       );
 
-      allow delete: if false;
+      allow delete: if isAdmin() || (
+        role(request.auth.uid) == 'caremanager' &&
+        resource.data.role == 'caremanager' &&
+        resource.data.userId != request.auth.uid
+      );
     }
 
-    /* ===================== HEALTH LOGS (seniorId) ===================== */
+    /* ===================== HEALTH LOGS ===================== */
 
     match /healthLogs/{id} {
-      allow read: if hasAccessToSenior(resource.data.seniorId);
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.seniorId ||
+        isAssignedCareManager(resource.data.seniorId) ||
+        isLinkedFamily(resource.data.seniorId) ||
+        isAdmin()
+      );
       
-      // FIXED: Allow seniors to log their own vitals
+      allow list: if isSignedIn();
+      
       allow create: if isSignedIn() && (
-        isAdmin() || 
-        isSenior(request.resource.data.seniorId) ||
+        request.auth.uid == request.resource.data.seniorId ||
         (isCareManager() && request.resource.data.careManagerId == request.auth.uid)
       );
 
-      // FIXED: Allow currently assigned care manager to update (not just original creator)
-      allow update: if isSignedIn() && (
-        isAdmin() || 
-        isAssignedCareManager(resource.data.seniorId)
-      );
-      allow delete: if isAdmin();
+      allow update: if isSignedIn() && isAssignedCareManager(resource.data.seniorId);
     }
 
-    /* ===================== ALERTS (userId) ===================== */
+    /* ===================== ALERTS ===================== */
 
     match /alerts/{id} {
       allow read: if isSignedIn() && (
-        // Admin by UID with admin role
-        (userExists(request.auth.uid) && user(request.auth.uid).data.role == 'admin') ||
-        // Admin by Email - if user document exists at email path, allow read
-        (request.auth.email != null && exists(/databases/$(database)/documents/users/$(request.auth.email))) ||
-        // Seniors can see their own alerts
         request.auth.uid == resource.data.userId ||
-        // Care managers can see alerts for their assigned seniors
         isAssignedCareManager(resource.data.userId) ||
-        // Family can see alerts for their linked seniors
-        isLinkedFamily(resource.data.userId)
+        isLinkedFamily(resource.data.userId) ||
+        isAdmin()
       );
       
-      // FIXED: Only the senior themselves can trigger their panic alert
-      allow create: if isSignedIn() && (
-        isAdmin() || isSenior(request.resource.data.userId)
-      );
+      allow list: if isSignedIn();
+      
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;
 
       allow update: if isSignedIn() && (
-        isAdmin() || isAssignedCareManager(resource.data.userId)
+        request.auth.uid == resource.data.userId ||
+        isAssignedCareManager(resource.data.userId) ||
+        isLinkedFamily(resource.data.userId) ||
+        isAdmin()
       );
-      allow delete: if isAdmin();
     }
 
-    /* ===================== REMINDERS (userId) ===================== */
+    /* ===================== REMINDERS ===================== */
 
     match /reminders/{id} {
-      allow read: if hasAccessToSenior(resource.data.userId);
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.userId ||
+        isAssignedCareManager(resource.data.userId) ||
+        isLinkedFamily(resource.data.userId) ||
+        isAdmin()
+      );
       
-      // FIXED: Explicitly defined who can create reminders
-      allow create: if isSignedIn() && (
-        isAdmin() || 
-        isSenior(request.resource.data.userId) || 
+      allow list: if isSignedIn();
+      
+      allow create, update: if isSignedIn() && (
+        request.auth.uid == request.resource.data.userId || 
         isAssignedCareManager(request.resource.data.userId) || 
         isLinkedFamily(request.resource.data.userId)
       );
-
-      allow update: if isSignedIn() && (
-        isAdmin() || 
-        isSenior(resource.data.userId) || 
-        isAssignedCareManager(resource.data.userId) || 
-        isLinkedFamily(resource.data.userId)
-      );
-      allow delete: if false;
     }
 
-    /* ===================== ROUTINES (userId) ===================== */
+    /* ===================== ROUTINES ===================== */
 
     match /routines/{id} {
-      allow read: if hasAccessToSenior(resource.data.userId);
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.userId ||
+        isAssignedCareManager(resource.data.userId) ||
+        isLinkedFamily(resource.data.userId) ||
+        isAdmin()
+      );
+      
+      allow list: if isSignedIn();
       
       allow create: if isSignedIn() && (
-        isAdmin() || 
-        isSenior(request.resource.data.userId) || 
-        isAssignedCareManager(request.resource.data.userId) || 
+        request.auth.uid == request.resource.data.userId || 
+        isAssignedCareManager(request.resource.data.userId) ||
         isLinkedFamily(request.resource.data.userId)
       );
-
-      // FIXED: Allow family to update routines (consistency with create permission)
+      
       allow update: if isSignedIn() && (
-        isAdmin() || 
-        isSenior(resource.data.userId) || 
+        request.auth.uid == resource.data.userId || 
         isAssignedCareManager(resource.data.userId) ||
         isLinkedFamily(resource.data.userId)
       );
-      allow delete: if false;
+      
+      allow delete: if isSignedIn() && (
+        request.auth.uid == resource.data.userId ||
+        isLinkedFamily(resource.data.userId)
+      );
     }
 
-    /* ===================== TASKS & CARER TASKS (seniorId) ===================== */
+    /* ===================== TASKS & CARER TASKS ===================== */
 
     match /tasks/{id} {
-      allow read: if hasAccessToSenior(resource.data.seniorId);
-      // FIXED: Allow seniors and family to create/update tasks (service requests)
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.seniorId ||
+        isAssignedCareManager(resource.data.seniorId) ||
+        isLinkedFamily(resource.data.seniorId) ||
+        isAdmin()
+      );
+      
+      allow list: if isSignedIn();
+      
       allow create, update: if isSignedIn() && (
-        isAdmin() ||
-        isSenior(request.resource.data.seniorId) ||
+        request.auth.uid == request.resource.data.seniorId ||
         isLinkedFamily(request.resource.data.seniorId) ||
         (isCareManager() && request.resource.data.careManagerId == request.auth.uid)
       );
-      allow delete: if isAdmin();
     }
 
     match /carerTasks/{id} {
-      allow read: if hasAccessToSenior(resource.data.seniorId);
-      // FIXED: Allow seniors and family to create/update tasks (service requests)
-      allow create, update: if isSignedIn() && (
-        isAdmin() ||
-        isSenior(request.resource.data.seniorId) ||
-        isLinkedFamily(request.resource.data.seniorId) ||
-        (isCareManager() && request.resource.data.careManagerId == request.auth.uid)
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.seniorId ||
+        request.auth.uid == resource.data.userId ||
+        isAssignedCareManager(resource.data.seniorId) ||
+        isAssignedCareManager(resource.data.userId) ||
+        isLinkedFamily(resource.data.seniorId) ||
+        isLinkedFamily(resource.data.userId) ||
+        isAdmin()
       );
-      allow delete: if isAdmin();
+      allow list: if isSignedIn();
+      
+      allow create, update: if isSignedIn() && (
+        request.auth.uid == request.resource.data.seniorId ||
+        request.auth.uid == request.resource.data.userId ||
+        isLinkedFamily(request.resource.data.seniorId) ||
+        isLinkedFamily(request.resource.data.userId) ||
+        (isCareManager() && request.resource.data.careManagerId == request.auth.uid) ||
+        (isCareManager() && resource.data.careManagerId == request.auth.uid)
+      );
     }
 
-    /* ===================== LOGS (userId) ===================== */
+    /* ===================== LOGS ===================== */
 
     match /logs/{id} {
-      allow read: if hasAccessToSenior(resource.data.userId);
-      
-      // FIXED: Only seniors can create their own check-in/routine logs
-      allow create: if isSignedIn() && (
-        isAdmin() || isSenior(request.resource.data.userId)
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.userId ||
+        isAssignedCareManager(resource.data.userId) ||
+        isLinkedFamily(resource.data.userId) ||
+        isAdmin()
       );
-      allow update, delete: if isAdmin();
+      allow list: if isSignedIn();
+      
+      allow create: if isSignedIn() && request.auth.uid == request.resource.data.userId;
+      
+      allow update: if isSignedIn() && (
+        request.auth.uid == resource.data.userId ||
+        isAssignedCareManager(resource.data.userId) ||
+        isLinkedFamily(resource.data.userId)
+      );
     }
 
-    /* ===================== SERVICE REQUESTS (seniorId) ===================== */
+    /* ===================== SERVICE REQUESTS ===================== */
 
     match /serviceRequests/{id} {
-      allow read: if hasAccessToSenior(resource.data.seniorId);
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.seniorId ||
+        isAssignedCareManager(resource.data.seniorId) ||
+        isLinkedFamily(resource.data.seniorId) ||
+        isAdmin()
+      );
       
-      allow create: if isSignedIn() && (
-        isAdmin() || 
-        isSenior(request.resource.data.seniorId) || 
+      allow list: if isSignedIn();
+      
+      allow create, update: if isSignedIn() && (
+        request.auth.uid == request.resource.data.seniorId ||
         isAssignedCareManager(request.resource.data.seniorId) || 
         isLinkedFamily(request.resource.data.seniorId)
       );
-
-      // FIXED: Allow seniors to update their own service requests
-      allow update: if isSignedIn() && (
-        isAdmin() ||
-        isSenior(resource.data.seniorId) ||
-        isAssignedCareManager(resource.data.seniorId) || 
-        isLinkedFamily(resource.data.seniorId)
-      );
-      allow delete: if isAdmin();
     }
 
-    /* ===================== SCHEDULED CHECK-INS (seniorId) ===================== */
+    /* ===================== SCHEDULED CHECK-INS ===================== */
 
     match /scheduledCheckIns/{id} {
-      allow read: if hasAccessToSenior(resource.data.seniorId);
+      allow read: if isSignedIn() && (
+        request.auth.uid == resource.data.seniorId ||
+        isAssignedCareManager(resource.data.seniorId) ||
+        isLinkedFamily(resource.data.seniorId) ||
+        isAdmin()
+      );
+      
+      allow list: if isSignedIn();
+      
       allow create, update: if isSignedIn() && (
-        isAdmin() || 
         isAssignedCareManager(request.resource.data.seniorId) ||
         isLinkedFamily(request.resource.data.seniorId)
       );
-      allow delete: if isAdmin();
     }
   }
 }
