@@ -143,6 +143,31 @@ By default, Firestore is open to everyone. You must add security rules to protec
 
 1.  Go to **Firestore Database** → **Rules** tab.
 2.  Delete everything there and copy the entire content from the `frontend/firestore.rules` file in your project folder.
+Or Upload this 
+```
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===================================
+    //  🚨 DEVELOPMENT MODE - ALLOW ALL 🚨
+    //       ⚠️ REPLACE WITH PRODUCTION RULES BEFORE DEPLOYING! ⚠️
+    // ===================================
+    // This rule allows ANYONE (authenticated or not) to do ANYTHING
+    // Use this during development to avoid any permission issues
+    // Replace with proper role-based rules before production deployment
+    
+    match /{document=**} {
+      // Allow ALL operations for ANYONE (no authentication required)
+      allow read, write: if true;
+    }
+  }
+}
+
+
+```
+
 3.  Click **Publish**.
 
 **What these rules do:**
