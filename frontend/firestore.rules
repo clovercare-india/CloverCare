@@ -9,6 +9,19 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isAdmin() {
+      return isSignedIn() && (
+        // Check by UID
+        (userExists(request.auth.uid) && user(request.auth.uid).data.role == 'admin') ||
+        // Check by Email (for CMS)
+        (request.auth.email != null && 
+         exists(/databases/$(database)/documents/users/$(request.auth.email)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.email)).data.role == 'admin') ||
+        // If any user document exists with their email, assume admin (CMS auth)
+        (request.auth.email != null && exists(/databases/$(database)/documents/users/$(request.auth.email)))
+      );
+    }
+
     function user(uid) {
       return get(/databases/$(database)/documents/users/$(uid));
     }
@@ -19,10 +32,6 @@ service cloud.firestore {
 
     function role(uid) {
       return userExists(uid) ? user(uid).data.role : null;
-    }
-
-    function isAdmin() {
-      return isSignedIn() && role(request.auth.uid) == 'admin';
     }
 
     function isSenior(uid) {
@@ -56,36 +65,54 @@ service cloud.firestore {
       );
     }
 
+    /* ===================== GLOBAL RULE - ADMINS CAN DO ANYTHING ===================== */
+    
+    // Admins have full access to all collections
+    match /{document=**} {
+      allow read, write, delete: if isAdmin();
+    }
+
     /* ===================== USERS ===================== */
 
     match /users/{userId} {
       allow read: if isSignedIn() && (
         request.auth.uid == userId ||
-        isAdmin() ||
-        (resource.data.role == 'senior' && (isAssignedCareManager(userId) || isLinkedFamily(userId)))
+        (resource.data.role == 'senior' && request.auth.uid in resource.data.get('linkedFamily', [])) ||
+        (resource.data.role == 'senior' && isAssignedCareManager(userId)) ||
+        // Allow reading senior by linking code (for family members linking)
+        (resource.data.role == 'senior' && resource.data.get('linkingCode', null) != null) ||
+        // Allow reading any user document that has a role (needed for CMS email-based authenticator)
+        resource.data.role != null
       );
 
-      allow create: if isSignedIn() && request.auth.uid == userId && 
-        request.resource.data.get('role', null) != 'admin';
+      allow create: if isSignedIn() && (
+        // Admins can create any non-admin user
+        (isAdmin() && request.resource.data.get('role', null) != 'admin') ||
+        // User creating their own profile
+        (request.auth.uid == userId && request.resource.data.get('role', null) != 'admin') ||
+        // Family member creating a senior profile
+        (role(request.auth.uid) == 'family' && 
+         request.resource.data.get('role', null) == 'senior' &&
+         request.auth.uid in request.resource.data.get('linkedFamily', []))
+      );
 
       allow update: if isSignedIn() && (
-        isAdmin() ||
+        // User updating their own profile (except role)
+        (request.auth.uid == userId && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])) ||
+        // Family linking to a senior: can add to senior's linkedFamily array
         (
-          request.auth.uid == userId &&
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role'])
-        ) ||
-        (
-          // FIXED: Family linking is now strictly self-service and single-entry
           role(request.auth.uid) == 'family' &&
           resource.data.role == 'senior' &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['linkedFamily', 'updatedAt']) &&
+          request.resource.data.linkedFamily is list &&
+          resource.data.get('linkedFamily', []) is list &&
           request.resource.data.linkedFamily.hasAll(resource.data.get('linkedFamily', [])) &&
           request.resource.data.linkedFamily.size() == resource.data.get('linkedFamily', []).size() + 1 &&
           request.auth.uid in request.resource.data.linkedFamily
         )
       );
 
-      allow delete: if isAdmin();
+      allow delete: if false;
     }
 
     /* ===================== HEALTH LOGS (seniorId) ===================== */
@@ -111,7 +138,18 @@ service cloud.firestore {
     /* ===================== ALERTS (userId) ===================== */
 
     match /alerts/{id} {
-      allow read: if hasAccessToSenior(resource.data.userId);
+      allow read: if isSignedIn() && (
+        // Admin by UID with admin role
+        (userExists(request.auth.uid) && user(request.auth.uid).data.role == 'admin') ||
+        // Admin by Email - if user document exists at email path, allow read
+        (request.auth.email != null && exists(/databases/$(database)/documents/users/$(request.auth.email))) ||
+        // Seniors can see their own alerts
+        request.auth.uid == resource.data.userId ||
+        // Care managers can see alerts for their assigned seniors
+        isAssignedCareManager(resource.data.userId) ||
+        // Family can see alerts for their linked seniors
+        isLinkedFamily(resource.data.userId)
+      );
       
       // FIXED: Only the senior themselves can trigger their panic alert
       allow create: if isSignedIn() && (
@@ -233,7 +271,9 @@ service cloud.firestore {
     match /scheduledCheckIns/{id} {
       allow read: if hasAccessToSenior(resource.data.seniorId);
       allow create, update: if isSignedIn() && (
-        isAdmin() || isAssignedCareManager(request.resource.data.seniorId)
+        isAdmin() || 
+        isAssignedCareManager(request.resource.data.seniorId) ||
+        isLinkedFamily(request.resource.data.seniorId)
       );
       allow delete: if isAdmin();
     }
